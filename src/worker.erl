@@ -2,7 +2,7 @@
 -import(crypto, [hash/2]).
 -import(rng, [rnd_number/1]).
 
--export([init/0, hashActor/0, hashAndCheck/2, getSha256Hash/1, countZeros/2]).
+-export([init/1, hashActor/1, hashAndCheck/2, getSha256Hash/1, countZeros/2]).
 
 getSha256Hash(N) ->
     HashInteger =
@@ -36,46 +36,63 @@ hashAndCheck(ToHash, NumberOfZeros) ->
             false
     end.
 
-generateString(Prefix1, Prefix2, LengthOfString) ->
-    RndStr = rng:rnd_number(LengthOfString),
-    ToHash = Prefix1 ++ Prefix2 ++ RndStr,
+% generateString(Prefix1, Prefix2, LengthOfString) ->
+%     RndStr = rng:rnd_number(LengthOfString),
+%     ToHash = Prefix1 ++ Prefix2 ++ RndStr,
+%     ToHash.
+
+prepareString(Prefix1, Prefix2, Curr) ->
+    ToHash = Prefix1 ++ Prefix2 ++ Curr,
     ToHash.
 
-findToken(Prefix, Low, High, Curr, LengthOfString, NumberOfZeros) ->
-    ToHash = generateString(Prefix, Curr, LengthOfString),
+findToken(Prefix, RndmPrefix, Low, High, Curr, NumberOfZeros) ->
+    % ToHash = generateString(Prefix, Curr, LengthOfString),
+    ToHash = prepareString(Prefix, RndmPrefix, Curr),
     HashResult = hashAndCheck(ToHash, NumberOfZeros),
     if
-        HashResult == true ->
-            [true, ToHash];
-        
+        Curr > High ->
+            [false, none, none];
         true ->
-            [false, none]
+            [ok, none, none]
     end,
-    findToken(Prefix, Low, High, Curr - 1, LengthOfString, NumberOfZeros).
-
-hashActor() ->
-    receive
-        {Client, ToHash, NumberOfZeros} ->
+    if
+        HashResult == true ->
             Hash = getSha256Hash(ToHash),
-            io:format("sha256 hash: ~p~n", [Hash]),
-            Result = countZeros(Hash, NumberOfZeros),
+            [true, ToHash, Hash];
+        true ->
+            [false, none, none]
+    end,
+    findToken(Prefix, RndmPrefix, Low, High, Curr + 1, NumberOfZeros).
+
+hashActor(SupervisorPid) ->
+    receive
+        % {} ->
+        %     io:format("Looping~p~n", [SupervisorPid]);
+        {start, SupervisorPid} ->
+            io:format("Starting the mining process by requesting supervisor for work~n", []),
+            io:format("Supervisor Pid: ~p~n", [SupervisorPid]),
+            SupervisorPid ! {start, self()};
+        {mine, SupervisorPid, Prefix1, Prefix2, Low, High, NumberOfZeros} ->
+            Output = findToken(Prefix1, Prefix2, Low, High, Low, NumberOfZeros),
+            Result = hd(Output),
+            ToHash = lists:nth(2, Output),
+            Hash = lists:nth(3, Output),
             if
                 Result == true ->
-                    Client ! {Hash, NumberOfZeros};
+                    SupervisorPid ! {found, self(), ToHash, Hash};
                 %% else case or default
                 true ->
-                    Client ! {"No leading Zero", Hash}
-            end;
-        {Client, _} ->
-            Client ! "Missing 1 parameter";
-        {Client} ->
-            Client ! "Missing 2 parameters"
+                    SupervisorPid ! {not_found, self(), none, none}
+            end
     end,
-    hashActor().
+    hashActor(SupervisorPid).
 
-init() ->
-    Pid = spawn(worker, hashActor, []),
+init(SupervisorPid) ->
+    % Pid = spawn(worker, hashActor, [spid]),
+    Pid = spawn(fun() -> hashActor(SupervisorPid) end),
     % we keep track of the process id
     register(wk1, Pid),
     io:format("~p~n", [Pid]),
-    io:format("~p\n", [wk1]).
+    % Pid ! {start, SupervisorPid},
+    io:format("~p\n", [wk1]),
+    Pid.
